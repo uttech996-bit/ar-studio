@@ -1,0 +1,81 @@
+# AR Studio — desktop installer builds (GitHub Actions, free tier)
+#
+# Triggers:
+#   - push of a tag like v1.0.0 / v1.2.3  -> builds installers for all 3 OSes
+#   - manual "Run workflow" from the Actions tab (workflow_dispatch)
+#
+# Each OS job builds the Electron shell in desktop/ (see desktop/README.md):
+#   Windows -> .exe installer (nsis, x64)
+#   macOS   -> .dmg (arm64 + x64 universal build target)
+#   Linux   -> .AppImage (x64)
+# Finished installers are uploaded as workflow artifacts. To make them
+# downloadable, create a GitHub Release from the tag and attach the artifacts.
+#
+# HONEST NOTE: these builds are UNSIGNED — no Windows or Apple developer
+# certificate is used (certificates cost money, and this project stays
+# zero-cost). First launch will show OS warnings:
+#   - Windows: SmartScreen "Unknown publisher" — click "More info" > "Run anyway"
+#   - macOS: Gatekeeper "unidentified developer" — right-click the app > Open
+# The installers are safe if downloaded from this repo's Releases page.
+# If you later buy a signing certificate, wire it into electron-builder
+# (CSC_LINK / CSC_KEY_PASSWORD secrets, and Apple notarization for macOS).
+
+name: Desktop builds
+
+on:
+  push:
+    tags:
+      - "v*"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          - os: windows-latest
+            target: "--win"
+            label: windows
+          - os: macos-latest
+            target: "--mac"
+            label: macos
+          - os: ubuntu-latest
+            target: "--linux"
+            label: linux
+    runs-on: ${{ matrix.os }}
+    name: Build (${{ matrix.label }})
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+          cache: "npm"
+          cache-dependency-path: desktop/package-lock.json
+
+      - name: Install desktop dependencies
+        working-directory: desktop
+        run: npm ci
+
+      - name: Build installer (${{ matrix.label }})
+        working-directory: desktop
+        # electron-builder reads its config from the "build" key in
+        # desktop/package.json. No signing/notarization is configured (unsigned).
+        run: npx electron-builder ${{ matrix.target }} --publish never
+
+      - name: Upload installer artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: ar-studio-desktop-${{ matrix.label }}-${{ github.ref_name }}
+          path: |
+            desktop/dist/*.exe
+            desktop/dist/*.dmg
+            desktop/dist/*.AppImage
+          if-no-files-found: error
